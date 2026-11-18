@@ -107,9 +107,15 @@ const CanvasTools = (() => {
 })();
 
 function createPlots(s, api) {
-  const space = document.getElementById("space"), series = document.getElementById("series");
+  const space = document.getElementById("space");
+  const series = ["X", "Y", "Z", "Distance"].map(label => ({
+    canvas: document.getElementById("series" + label),
+    hint: document.getElementById("hint" + label),
+    value: document.getElementById("value" + label),
+    domain: null
+  }));
   const targetColor = "#10786a", refColor = "#b46027", grid = "#dce2db";
-  let hits = [], chartDomain = null;
+  let hits = [];
   const defaultView = () =>
       ({yaw: -0.5, pitch: 0.27, zoom: 1, panX: 0, panY: 0, center: [0, 0, 0], span: 1, fitted: false});
   function range() {
@@ -239,16 +245,13 @@ function createPlots(s, api) {
     return Number(value.toPrecision(4)).toString();
   }
   function drawSeries() {
-    const {ctx, w, h} = CanvasTools.surface(series);
-    const [lo, hi] = range(), left = 61, right = Math.max(left + 1, w - 13), top = 12,
-               bottom = Math.max(top + 1, h - 23);
-    const x = i => hi === lo ? (left + right) / 2 : left + (right - left) * (i - lo) / (hi - lo);
-    chartDomain = hi >= lo ? {lo, hi, left, right} : null;
-    const channels = s.tab === "distance" ? [3] : [0, 1, 2], cell = (bottom - top) / channels.length;
-    const labels = ["X", "Y", "Z", "距離"], colors = ["#347b62", "#a15e2e", "#3d6899", targetColor];
-    let any = false;
-    channels.forEach((ch, row) => {
-      const y0 = top + row * cell + 2, y1 = top + (row + 1) * cell - 4;
+    const [lo, hi] = range();
+    const colors = ["#347b62", "#a15e2e", "#3d6899", targetColor];
+    series.forEach((chart, ch) => {
+      const {ctx, w, h} = CanvasTools.surface(chart.canvas);
+      const left = 51, right = Math.max(left + 1, w - 10), y0 = 10, y1 = Math.max(11, h - 23);
+      const x = i => hi === lo ? (left + right) / 2 : left + (right - left) * (i - lo) / (hi - lo);
+      chart.domain = hi >= lo ? {lo, hi, left, right} : null;
       if (!s.axes[ch] && api.enabled())
         s.axes[ch] = bounds(ch, lo, hi);
       const extent = s.axes[ch] || [0, 1], [min, max] = extent;
@@ -261,7 +264,6 @@ function createPlots(s, api) {
       ctx.lineTo(right, y1);
       ctx.stroke();
       ctx.fillStyle = "#52625a";
-      ctx.fillText(labels[ch], 5, (y0 + y1) / 2 + 4);
       if (s.axes[ch]) {
         ctx.textAlign = "right";
         ctx.fillText(number(max), left - 4, y0 + 9);
@@ -283,7 +285,7 @@ function createPlots(s, api) {
       ctx.fillStyle = colors[ch];
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      let fresh = true;
+      let fresh = true, any = false;
       for (let i = lo; api.enabled() && i <= hi; i++) {
         const v = sample(ch, i);
         if (v == null) {
@@ -303,23 +305,20 @@ function createPlots(s, api) {
       if (v != null)
         CanvasTools.marker(ctx, x(s.frame), y(v), 4, colors[ch]);
       ctx.restore();
-    });
-    ctx.fillStyle = "#65736a";
-    if (hi >= lo) {
-      ctx.fillText(String(lo + 1), left, h - 6);
-      ctx.textAlign = "right";
-      ctx.fillText(String(hi + 1), right, h - 6);
+      ctx.fillStyle = "#65736a";
+      if (hi >= lo) {
+        ctx.fillText(String(lo + 1), left, h - 6);
+        ctx.textAlign = "right";
+        ctx.fillText(String(hi + 1), right, h - 6);
+      }
+      ctx.textAlign = "center";
+      ctx.fillText("Frame", (left + right) / 2, h - 6);
       ctx.textAlign = "left";
-    }
-    ctx.textAlign = "center";
-    ctx.fillText("フレーム", w / 2, h - 6);
-    ctx.textAlign = "left";
-    document.getElementById("seriesHint").textContent = any ?
-        "" :
-        (!api.enabled() ?
-             api.reason() :
-             (s.tab === "distance" && s.refs[s.id] == null ? "参照IDを選択" :
-                                                             "表示範囲に有効な観測がありません"));
+      chart.value.textContent = v == null ? "—" : number(v) + " " + (s.unit || "単位未設定");
+      chart.value.title = chart.value.textContent;
+      chart.hint.textContent = any ? "" : !api.enabled() ? "3D未計算" :
+          ch === 3 && s.refs[s.id] == null ? "参照IDを選択" : "表示範囲に打点なし";
+    });
   }
   CanvasTools.navigation(
       space, e => e.button === 0,
@@ -357,18 +356,24 @@ function createPlots(s, api) {
     api.draw();
     api.changed();
   }, {passive: false});
-  CanvasTools.navigation(series, e => e.button === 0, () => {}, p => {
-    if (!chartDomain)
-      return;
-    const {lo, hi, left, right} = chartDomain;
-    api.go(Math.round(lo + Math.min(1, Math.max(0, (p[0] - left) / (right - left))) * (hi - lo)));
+  series.forEach(chart => {
+    CanvasTools.navigation(chart.canvas, e => e.button === 0, () => {}, p => {
+      if (!chart.domain)
+        return;
+      const {lo, hi, left, right} = chart.domain;
+      api.go(Math.round(lo + Math.min(1, Math.max(0, (p[0] - left) / (right - left))) * (hi - lo)));
+    });
   });
   function showProgress(message) {
     hits = [];
-    chartDomain = null;
     CanvasTools.surface(space);
-    CanvasTools.surface(series);
-    for (const id of ["spaceHint", "seriesHint"]) document.getElementById(id).textContent = message;
+    document.getElementById("spaceHint").textContent = message;
+    series.forEach(chart => {
+      chart.domain = null;
+      CanvasTools.surface(chart.canvas);
+      chart.hint.textContent = message;
+      chart.value.textContent = "—";
+    });
   }
   return {defaultView, drawSpace, drawSeries, fitSpace, range, showProgress};
 }

@@ -2,22 +2,42 @@
 <html lang="ja"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>clickiPad · 2視点打点</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20261118-portrait">
   <script defer src="stereo.js"></script><script defer src="media.js?v=20261118-frames"></script>
-  <script defer src="plots.js"></script><script defer src="app.js?v=20261118-frames"></script>
+  <script defer src="plots.js?v=20261118-portrait"></script><script defer src="app.js?v=20261118-portrait"></script>
 </head><body>
 <div id="videoPool" aria-hidden="true"></div>
 <main id="workspace">
   <header class="toolbar">
     <div class="group selectors"><label><i class="circle"></i>対象 <select id="target" aria-label="対象ID"></select></label>
     <label><i class="diamond"></i>参照 <select id="reference" aria-label="参照ID"></select></label></div>
-    <div class="group transport"><button id="prev" aria-label="前のフレーム">◀</button>
-      <input id="frameNo" type="number" min="1" value="1" aria-label="現在フレーム"><span id="total">/ —</span>
-      <button id="next" aria-label="次のフレーム">▶</button><input id="slider" type="range" min="1" max="1" value="1" aria-label="共通フレーム"></div>
     <div class="group actions"><button id="undo" title="Undo (Ctrl/⌘ Z)">Undo</button><button id="redo" title="Redo (Ctrl/⌘ Shift Z)">Redo</button>
       <button id="save" class="primary">保存</button><button id="settings">設定</button></div>
   </header>
-  <div class="cameras pair" id="cameras"></div>
+  <section class="stage" aria-label="動画とフレーム操作">
+    <nav class="side-controls" aria-label="フレーム送りとカメラ切替">
+      <div class="rail-group" role="group" aria-label="フレーム送り">
+        <button id="prev" aria-label="前のフレーム"><span aria-hidden="true">◀</span><small>前へ</small></button>
+        <button id="next" aria-label="次のフレーム"><span aria-hidden="true">▶</span><small>次へ</small></button>
+      </div>
+      <div class="rail-group" role="group" aria-label="カメラ切替">
+        <button id="camera0" aria-label="Camera 1を表示" aria-pressed="true"><small>Camera</small><span>1</span></button>
+        <button id="camera1" aria-label="Camera 2を表示" aria-pressed="false"><small>Camera</small><span>2</span></button>
+      </div>
+    </nav>
+    <div class="cameras" id="cameras"></div>
+    <div class="transport">
+      <label for="frameNo">Frame</label><input id="frameNo" type="number" min="1" value="1" aria-label="現在フレーム"><span id="total">/ —</span>
+      <input id="slider" type="range" min="1" max="1" value="1" aria-label="共通フレーム">
+      <details id="gammaControl">
+        <summary>ガンマ</summary>
+        <div class="gamma-panel">
+          <label for="gamma">ガンマ（両カメラ） <output id="gammaValue">1.00</output></label>
+          <div class="group"><input type="range" id="gamma" min="0.1" max="2" step="0.05" value="1" aria-label="ガンマ補正"><button id="gammaReset">1.00に戻す</button></div>
+        </div>
+      </details>
+    </div>
+  </section>
   <div class="editbar">
     <div class="group"><b id="activeLabel">C1 微調整</b>
       <select id="nudgeStep" aria-label="微調整量"><option>0.25</option><option>0.5</option><option>1</option></select><span>px</span>
@@ -25,16 +45,22 @@
       <button data-dx="0" data-dy="-1" aria-label="上へ微調整">↑</button><button data-dx="0" data-dy="1" aria-label="下へ微調整">↓</button>
       <button id="deletePoint">削除</button></div>
     <div class="group metrics"><span>Z <output id="z">—</output></span><span>距離 <output id="dist">—</output></span></div>
-    <span id="status" role="status"></span><button id="retry" hidden>再試行</button>
   </div>
-  <div class="plots pair">
-    <section class="panel"><div class="panelhead"><h2>3D軌道</h2><div class="group"><button data-plane="XY">XY</button><button data-plane="XZ">XZ</button><button data-plane="YZ">YZ</button><button id="fit3d">全体を表示</button></div></div>
+  <div class="plots">
+    <div class="analysis-toolbar">
+      <span id="status" role="status"></span><button id="retry" hidden>再試行</button>
+      <div class="group"><select id="scope" aria-label="表示フレーム範囲"><option value="local">前後 20 F</option><option value="all">全区間</option></select><button id="fitAxes">4図の縦軸を合わせる</button></div>
+    </div>
+    <section class="panel space-panel"><div class="panelhead"><h2>3D軌道</h2><button id="fit3d">全体を表示</button>
+      <div class="group planes"><button data-plane="XY">XY</button><button data-plane="XZ">XZ</button><button data-plane="YZ">YZ</button></div></div>
       <div class="viewport paper"><canvas id="space" aria-label="3D軌道、ドラッグで回転"></canvas><div id="spaceHint" class="plot-hint"></div></div>
     </section>
-    <section class="panel"><div class="panelhead"><div class="tabs" role="group" aria-label="グラフ切替"><button id="distanceTab" aria-pressed="true">距離</button><button id="xyzTab" aria-pressed="false">XYZ</button></div>
-      <div class="group"><select id="scope" aria-label="表示フレーム範囲"><option value="local">前後 20 F</option><option value="all">全区間</option></select><button id="fitAxes">縦軸を合わせる</button></div></div>
-      <div class="viewport paper"><canvas id="series" aria-label="フレーム別の値、タップで移動"></canvas><div id="seriesHint" class="plot-hint"></div></div>
-    </section>
+    <div id="seriesGrid" class="series-grid">
+      <section class="panel series-panel"><div class="panelhead"><h2>X</h2><output id="valueX">—</output></div><div class="viewport paper"><canvas id="seriesX" aria-label="X時系列、タップで移動"></canvas><div id="hintX" class="plot-hint"></div></div></section>
+      <section class="panel series-panel"><div class="panelhead"><h2>Y</h2><output id="valueY">—</output></div><div class="viewport paper"><canvas id="seriesY" aria-label="Y時系列、タップで移動"></canvas><div id="hintY" class="plot-hint"></div></div></section>
+      <section class="panel series-panel"><div class="panelhead"><h2>Z</h2><output id="valueZ">—</output></div><div class="viewport paper"><canvas id="seriesZ" aria-label="Z時系列、タップで移動"></canvas><div id="hintZ" class="plot-hint"></div></div></section>
+      <section class="panel series-panel"><div class="panelhead"><h2>距離</h2><output id="valueDistance">—</output></div><div class="viewport paper"><canvas id="seriesDistance" aria-label="参照点との距離、タップで移動"></canvas><div id="hintDistance" class="plot-hint"></div></div></section>
+    </div>
   </div>
 </main>
 <template id="cameraTemplate"><section class="panel camera">
@@ -55,8 +81,8 @@
     <label>ID数 <input type="number" id="idCount" min="1" value="10"></label><label>選択中のID名 <input id="pointName" type="text" placeholder="未設定"></label>
     <label>新規打点後 <select id="advance"><option value="none">自動送りなし</option><option value="frame">フレーム送り</option><option value="id">ID送り</option></select></label>
     <label>フレーム移動幅 <input type="number" min="1" id="frameStep" value="1"></label>
-    <label>2D軌跡の長さ <input type="number" min="0" id="trail" value="5"></label><label>ガンマ <input type="number" id="gamma" min="0.1" max="2" step="0.05" value="1"></label>
-    <label>局所範囲 ± F <input type="number" min="1" id="radius" value="20"></label><label>画像の高さ配分 <input type="range" id="split" min="35" max="75" value="60"></label>
+    <label>2D軌跡の長さ <input type="number" min="0" id="trail" value="5"></label>
+    <label>局所範囲 ± F <input type="number" min="1" id="radius" value="20"></label><label>動画欄の高さ配分 <input type="range" id="split" min="35" max="75" value="60"></label>
     <label><input type="checkbox" id="otherNames"> 3Dに他の点の名前を表示</label><button id="missing">次の未入力へ</button>
     </div><small>Pencil・マウスで選択IDを打点。指で画像をパン・ピンチ。3Dはドラッグで回転、2本指またはShift＋ドラッグで移動。ホイール・ピンチで拡大縮小。</small></section>
 </dialog>

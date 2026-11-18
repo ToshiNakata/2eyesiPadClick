@@ -27,7 +27,7 @@ button,select,input {
   accent-color: var(--accent);
 }
 
-button,select,input:not([type=file]):not([type=range]):not([type=checkbox]),.filebutton {
+button,select,input:not([type=file]):not([type=range]):not([type=checkbox]),.filebutton,summary {
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -35,7 +35,7 @@ button,select,input:not([type=file]):not([type=range]):not([type=checkbox]),.fil
   padding: 4px 9px;
 }
 
-button,.filebutton,select {
+button,.filebutton,select,summary {
   cursor: pointer;
 }
 
@@ -63,7 +63,7 @@ button.primary:hover:not(:disabled),button[aria-pressed=true]:hover {
   outline-offset: 1px;
 }
 
-.group,.toolbar,.editbar,.panelhead,.row,.dialoghead,.tabs,.selectors label {
+.group,.toolbar,.editbar,.panelhead,.row,.dialoghead,.selectors label,.transport,.analysis-toolbar {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -93,10 +93,81 @@ button.primary:hover:not(:disabled),button[aria-pressed=true]:hover {
   background: #e9ede7;
 }
 
-.pair {
+.stage {
+  display: grid;
+  grid-template-columns: 76px minmax(0,1fr);
+  grid-template-rows: minmax(0,1fr) auto;
+  gap: 7px;
+  min-height: 0;
+}
+
+.side-controls {
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 24px;
+}
+
+.rail-group {
+  display: grid;
+  gap: 8px;
+}
+
+.rail-group button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 62px;
+  gap: 2px;
+}
+
+.rail-group span {
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.rail-group small {
+  font-size: 13px;
+}
+
+.cameras {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+.transport {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.plots {
+  display: grid;
+  grid-template-columns: minmax(200px,0.9fr) minmax(0,1.6fr);
+  grid-template-rows: auto minmax(0,1fr);
+  gap: 7px;
+  min-height: 0;
+}
+
+.analysis-toolbar {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.analysis-toolbar .group {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.series-grid {
   display: grid;
   grid-template-columns: repeat(2,minmax(0,1fr));
+  grid-template-rows: repeat(2,minmax(0,1fr));
   gap: 7px;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -142,7 +213,35 @@ h3 {
 }
 
 .panelhead button,.panelhead select {
-  min-height: 32px;
+  min-height: 36px;
+}
+
+.space-panel .panelhead {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+
+.space-panel .planes {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.planes button {
+  flex: 1;
+}
+
+.series-panel .panelhead {
+  min-height: 29px;
+}
+
+.series-panel output {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .filename {
@@ -235,11 +334,7 @@ h3 {
   transform: rotate(45deg);
 }
 
-.transport {
-  flex: 1;
-}
-
-.transport button,.editbar button[data-dx] {
+.editbar button[data-dx] {
   min-width: 36px;
   font-weight: 650;
 }
@@ -253,7 +348,7 @@ h3 {
   width: 65px;
   min-width: 40px;
   flex: 1;
-  height: 34px;
+  height: 38px;
 }
 
 #total {
@@ -263,9 +358,8 @@ h3 {
 }
 
 .metrics {
-  padding-left: 12px;
-  border-left: 1px solid var(--line);
-  gap: 15px;
+  margin-left: auto;
+  gap: 12px;
 }
 
 .metrics span {
@@ -280,6 +374,7 @@ h3 {
 
 .editbar {
   font-size: 14px;
+  flex-wrap: wrap;
 }
 
 .editbar button,.editbar select {
@@ -291,9 +386,7 @@ h3 {
 }
 
 #status {
-  margin-left: auto;
   color: var(--muted);
-  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -307,13 +400,77 @@ h3 {
   pointer-events: none;
   color: var(--muted);
   text-align: center;
-  padding: 0 36px;
+  padding: 8px 14px;
   text-shadow: 0 1px 3px #fff;
   font-size: 14px;
 }
 
-.tabs {
-  gap: 2px;
+.series-panel .plot-hint {
+  padding-left: 54px;
+  font-size: 12px;
+}
+
+#gammaControl {
+  position: relative;
+  flex: none;
+}
+
+#gammaControl summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  list-style: none;
+}
+
+#gammaControl summary::-webkit-details-marker {
+  display: none;
+}
+
+#gammaControl summary::after {
+  content: "▴";
+}
+
+#gammaControl[open] summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#gammaControl[open] summary::after {
+  content: "▾";
+}
+
+.gamma-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 3;
+  width: 300px;
+  padding: 12px;
+  background: #fffefa;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 4px 20px #12241f35;
+}
+
+.gamma-panel label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+#gamma {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+}
+
+#gammaReset {
+  white-space: nowrap;
+}
+
+#gammaValue {
+  font-variant-numeric: tabular-nums;
 }
 
 #videoPool {
@@ -331,7 +488,7 @@ h3 {
   height: 2px;
 }
 
-button, select, .filebutton {
+button, select, .filebutton, summary {
   touch-action: manipulation;
 }
 
@@ -473,11 +630,11 @@ legend {
   }
 }
 
-@media(orientation:portrait) and (max-width:850px),(max-width:640px) {
+@media(max-width:640px) {
   #workspace {
     height: auto;
     min-height: 100dvh;
-    grid-template-rows: auto auto auto auto;
+    grid-template-rows: auto 48vh auto minmax(420px,1fr);
   }
   .toolbar,.editbar {
     flex-wrap: wrap;
@@ -485,25 +642,40 @@ legend {
   .actions {
     margin-left: 0;
   }
-  .pair {
+  .stage {
+    grid-template-columns: 58px minmax(0,1fr);
+  }
+  .rail-group button {
+    min-height: 50px;
+  }
+  .side-controls {
+    gap: 12px;
+  }
+  .plots {
+    grid-template-columns: minmax(120px,0.7fr) minmax(0,1.6fr);
+  }
+  .space-panel .panelhead {
     grid-template-columns: 1fr;
   }
-  .viewport {
-    min-height: 220px;
+  .space-panel .planes {
+    flex-wrap: wrap;
   }
-  .image {
-    min-height: 260px;
+  .analysis-toolbar {
+    flex-wrap: wrap;
   }
   .transport {
-    min-width: 220px;
+    gap: 4px;
+  }
+  .transport label {
+    display: none;
   }
   .fields {
     grid-template-columns: 1fr;
   }
-  .metrics {
-    margin-left: auto;
-  }
   .plot-hint {
     font-size: 13px;
+  }
+  .gamma-panel {
+    width: min(300px,75vw);
   }
 }
