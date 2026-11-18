@@ -3,8 +3,8 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>clickiPad · 2視点打点</title>
   <link rel="stylesheet" href="styles.css">
-  <script defer src="stereo.js"></script><script defer src="media.js"></script>
-  <script defer src="plots.js"></script><script defer src="app.js"></script>
+  <script defer src="stereo.js"></script><script defer src="media.js?v=20261118-frames"></script>
+  <script defer src="plots.js"></script><script defer src="app.js?v=20261118-frames"></script>
 </head><body>
 <div id="videoPool" aria-hidden="true"></div>
 <main id="workspace">
@@ -44,7 +44,7 @@
 <dialog id="dialog"><div class="dialoghead"><h1>作業設定</h1><button id="done">閉じる</button></div>
   <div id="message" role="status"></div>
   <section><h3>動画の割り当て</h3>
-    <div id="fileSlots"></div><div class="row"><small>両カメラとも movieConverter の 30 fps MP4</small><button id="loadPair" class="primary">2本を開く</button></div>
+    <div id="fileSlots"></div><div class="row"><small>同じフレーム数のMP4を指定</small><button id="loadPair" class="primary">2本を開く</button></div>
   </section>
   <section><h3>打点データ</h3><div class="row"><label class="filebutton">打点JSONを読む<input id="annotationFile" type="file" accept=".json,application/json"></label>
     <button id="restore">自動保存から復元</button></div><small id="backupInfo"></small></section>

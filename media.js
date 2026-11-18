@@ -1,6 +1,5 @@
-/* Local, non-fragmented 30 fps MP4s written by movieConverter.py. Skip mdat without reading it. */
+/* Read frame counts and presentation times from local MP4 sample tables. Skip mdat data. */
 const StereoMedia = (() => {
-  const FPS = 30;
   const fourcc = (dv, p) => String.fromCharCode(...new Uint8Array(dv.buffer, dv.byteOffset + p, 4));
   function atom(view, offset, end) {
     let size = view.getUint32(offset), header = 8;
@@ -53,6 +52,8 @@ const StereoMedia = (() => {
           clock = view.getUint32(mdhd.start + (view.getUint8(mdhd.start) ? 20 : 12));
     const timing = child(stbl, "stts");
     function runs(box, signed, fn) {
+      if (!box || box.end - box.start < 8)
+        throw Error("MP4 時間情報がありません");
       const n = view.getUint32(box.start + 4);
       if (box.end - box.start !== 8 + 8 * n)
         throw Error("MP4 時間情報が不正です");
@@ -61,15 +62,23 @@ const StereoMedia = (() => {
         fn(view.getUint32(p), signed ? view.getInt32(p + 4) : view.getUint32(p + 4));
       }
     }
-    let samples = 0;
+    if (!count || !clock)
+      throw Error("映像サンプル数または時間単位が不正です");
+    const timestamps = new Float64Array(count);
+    const durations = new Float64Array(count);
+    let samples = 0, decodeTime = 0;
     runs(timing, false, (n, delta) => {
-      if (!clock || delta * FPS !== clock)
-        throw Error("movieConverter の固定 30 fps MP4 が必要です");
-      samples += n;
+      if (!n || !delta || samples + n > count)
+        throw Error("映像サンプルの時間情報が不正です");
+      for (let j = 0; j < n; j++, samples++) {
+        timestamps[samples] = decodeTime;
+        durations[samples] = delta;
+        decodeTime += delta;
+      }
     });
-    if (!count || samples !== count)
+    if (samples !== count || !Number.isSafeInteger(decodeTime))
       throw Error("サンプル数と時間情報が一致しません");
-    // Verify the movie origin and a contiguous presentation grid, including B frames.
+    // Convert decode order to presentation order, including B frames and variable durations.
     const edits = child(tracks[0], "edts"), list = edits && child(edits, "elst");
     let origin = 0;
     if (list) {
@@ -81,24 +90,44 @@ const StereoMedia = (() => {
     }
     const composition = child(stbl, "ctts");
     if (composition) {
-      const used = new Uint8Array(count);
       let i = 0;
       runs(composition, view.getUint8(composition.start) === 1, (n, offset) => {
-        const shift = (offset - origin) * FPS / clock;
-        if (!Number.isInteger(shift) || i + n > count)
-          throw Error("提示時刻が 30 fps の格子と一致しません");
-        for (let j = 0; j < n; j++, i++) {
-          const frame = i + shift;
-          if (frame < 0 || frame >= count || used[frame])
-            throw Error("映像フレームに欠落または重複があります");
-          used[frame] = 1;
-        }
+        if (!n || i + n > count)
+          throw Error("提示サンプル数が不正です");
+        for (let j = 0; j < n; j++, i++)
+          timestamps[i] += offset;
       });
       if (i !== count)
         throw Error("提示サンプル数が不正です");
-    } else if (origin !== 0)
-      throw Error("映像の開始フレームを確定できません");
-    return count;
+    }
+    let lastSample = 0;
+    for (let i = 0; i < count; i++) {
+      timestamps[i] -= origin;
+      if (!Number.isSafeInteger(timestamps[i]) || timestamps[i] < 0)
+        throw Error("再生区間外の映像サンプルがあります");
+      if (timestamps[i] > timestamps[lastSample])
+        lastSample = i;
+    }
+    const endTicks = timestamps[lastSample] + durations[lastSample];
+    timestamps.sort();
+    let shortest = endTicks - timestamps[count - 1], longest = shortest;
+    for (let i = 1; i < count; i++) {
+      const gap = timestamps[i] - timestamps[i - 1];
+      if (gap <= 0)
+        throw Error("映像フレームの提示時刻が重複しています");
+      shortest = Math.min(shortest, gap);
+      longest = Math.max(longest, gap);
+    }
+    const fps = count * clock / (endTicks - timestamps[0]);
+    for (let i = 0; i < count; i++)
+      timestamps[i] /= clock;
+    return {
+      frameCount: count,
+      timestamps,
+      endTime: endTicks / clock,
+      fps,
+      variableFrameRate: longest - shortest > 1
+    };
   }
 
   // Distinguish same-named exports in different folders without loading entire movies into RAM.
@@ -129,7 +158,7 @@ const StereoMedia = (() => {
     element.muted = true;
     element.playsInline = true;
     element.preload = "auto";
-    let callback, waiter, disposed = false, lastPresented = -1, failedIndex = null;
+    let callback, waiter, timeline, disposed = false, lastPresented = null, failedIndex = null;
     const cache = new Map();
     const video = {name: file.name, element, frame, close};
     function close() {
@@ -167,8 +196,7 @@ const StereoMedia = (() => {
     function presented(_, metadata) {
       if (disposed)
         return;
-      const number = metadata.mediaTime * FPS, index = Math.round(number);
-      lastPresented = Math.abs(number - index) < 0.02 ? index : -1;
+      lastPresented = metadata.mediaTime;
       waiter?.check();
       callback = element.requestVideoFrameCallback(presented);
     }
@@ -183,7 +211,12 @@ const StereoMedia = (() => {
       return decode(index);
     }
     function decode(index) {
-      const target = (index + 0.5) / FPS;
+      const start = timeline.timestamps[index];
+      const end = timeline.timestamps[index + 1] ?? timeline.endTime;
+      const target = start + (end - start) / 2;
+      const previousGap = index > 0 ? start - timeline.timestamps[index - 1] : end - start;
+      // Browser timestamps may be rounded to microseconds. Keep the tolerance below adjacent frames.
+      const tolerance = Math.min(0.001, previousGap / 4, (end - start) / 4);
       return new Promise((resolve, reject) => {
         const timer = setTimeout(
             () => fail(Error(
@@ -205,8 +238,9 @@ const StereoMedia = (() => {
           fail(Error(video.name + "：動画のデコードに失敗しました"));
         }
         function check() {
-          if (lastPresented !== index || element.seeking || element.readyState < 2 ||
-              Math.floor(element.currentTime * FPS) !== index)
+          if (!Number.isFinite(lastPresented) || Math.abs(lastPresented - start) > tolerance ||
+              element.seeking || element.readyState < 2 ||
+              element.currentTime < start || element.currentTime >= end)
             return;
           try {
             const canvas = capture(index);
@@ -219,18 +253,18 @@ const StereoMedia = (() => {
         waiter = {check, fail};
         element.addEventListener("seeked", check);
         element.addEventListener("error", onError);
-        if (lastPresented === index && !element.seeking &&
-            Math.floor(element.currentTime * FPS) === index) {
-          check();
-          if (!waiter)
-            return;
-        }
+        check();
+        if (!waiter)
+          return;
         element.currentTime = target;
       });
     }
     try {
-      [video.frameCount, video.contentTag] =
+      [timeline, video.contentTag] =
           await Promise.all([inspect(file), contentTag(file, fullTag)]);
+      video.frameCount = timeline.frameCount;
+      video.fps = timeline.fps;
+      video.variableFrameRate = timeline.variableFrameRate;
       if (!element.requestVideoFrameCallback)
         throw Error("提示フレームを確認できる Safari / Chrome が必要です");
       document.getElementById("videoPool").append(element);
@@ -260,14 +294,15 @@ const StereoMedia = (() => {
       video.height = element.videoHeight;
       video.duration = element.duration;
       if (!video.width || !video.height || !Number.isFinite(video.duration) ||
-          Math.abs(video.duration * FPS - video.frameCount) > 0.1) {
+          video.duration <= timeline.timestamps[video.frameCount - 1]) {
         throw Error("実際の再生区間・画像寸法と映像サンプルが一致しません");
       }
+      timeline.endTime = Math.min(timeline.endTime, video.duration);
       return video;
     } catch (e) {
       close();
       throw Error(file.name + "：" + e.message);
     }
   }
-  return {open, inspect, FPS};
+  return {open, inspect};
 })();
