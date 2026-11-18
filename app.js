@@ -28,7 +28,6 @@
     step: 0.25,
     scope: "local",
     radius: 20,
-    tab: "distance",
     axes: [],
     split: 60,
     otherNames: false,
@@ -47,7 +46,7 @@
   let geometry = null, maps = null, geometryError = "", xyzCache = [], distanceCache = [],
       rangeJob = null;
   let drag = null, busyPair = false, queue = null, running = false, generation = 0, frameError = "",
-      backupError = "", autosaveTimer, drawTicket;
+      backupError = "", autosaveTimer, drawTicket, loadController = null, pendingAnnotation = null;
   const plots = createPlots(
       s, {count, xyz, dist, name, reason, enabled: () => !!geometry, draw: schedule, go, changed});
   s.view3 = plots.defaultView();
@@ -269,13 +268,21 @@
       return;
     }
     busyPair = true;
+    const controller = loadController = new AbortController();
     finishDrag(false);
     refresh();
-    message("映像トラックを確認中…");
+    const progress = ["開始中", "開始中"];
+    const report = (c, value) => {
+      if (controller.signal.aborted) return;
+      progress[c] = value;
+      message(progress.map((phase, i) => "Camera " + (i + 1) + "：" + phase).join("\n"));
+    };
     const next = [];
     try {
       const entries = await Promise.allSettled(
-          files.map(file => StereoMedia.open(file, files[0].name === files[1].name)));
+          files.map((file, c) => StereoMedia.open(file, {
+            signal: controller.signal, onProgress: value => report(c, value)
+          })));
       entries.forEach(r => {
         if (r.status === "fulfilled")
           next.push(r.value);
@@ -288,12 +295,20 @@
             "総フレーム数が一致しません。" +
             next.map(v => v.name + " = " + v.frameCount + " F").join(" ／ "));
       next.forEach((v, i) => v.file = files[i]);
+      if (pendingAnnotation) prepareImport(pendingAnnotation, next);
       const same = s.videos.length === 2 &&
           next.every(
               (v, i) => ["name", "frameCount", "width", "height", "contentTag"].every(
                   k => v[k] === s.videos[i][k]));
-      const first = same ? s.frame : 0;
-      const buffers = await Promise.all(next.map(v => v.frame(first)));
+      const first = pendingAnnotation ? clamp(int(pendingAnnotation.currentFrame, 0), 0, next[0].frameCount - 1) :
+          same ? s.frame : 0;
+      const buffers = await Promise.all(next.map(async (v, c) => {
+        report(c, v.frameCount + " F ／ フレーム " + (first + 1) + " を読込中");
+        const buffer = await v.frame(first);
+        report(c, v.frameCount + " F ／ 表示準備完了");
+        return buffer;
+      }));
+      if (controller.signal.aborted) throw Error("読み込みを中止しました");
       if (!same && s.dirty && !confirm("現在の作業を新しい動画ペアに切り替えますか？")) {
         message("現在の作業を継続します");
         return;
@@ -325,15 +340,19 @@
       message("");
       syncSettings();
       busyPair = false;
-      if (wasEmpty) {
+      if (pendingAnnotation) {
+        if (importData(pendingAnnotation)) pendingAnnotation = null;
+        syncSettings();
+      } else if (wasEmpty) {
         const backup = availableBackup(true);
         if (backup && confirm("この動画に対応する自動保存があります。復元しますか？"))
           importData(backup, true);
       }
     } catch (e) {
-      message(e.message);
+      message(controller.signal.aborted ? "読み込みを中止しました" : e.message);
     } finally {
       next.forEach(v => v.close());
+      loadController = null;
       busyPair = false;
       refresh();
       schedule();
@@ -392,10 +411,15 @@
   }
   function drawImages() {
     cameras.forEach((cam, c) => {
-      const {ctx} = CanvasTools.surface(cam.canvas), raw = s.buffers[c];
+      cam.panel.hidden = c !== s.active;
+      const raw = s.buffers[c];
+      if (raw)
+        s.videos[c].displayed = raw;
+      if (cam.panel.hidden)
+        return;
+      const {ctx} = CanvasTools.surface(cam.canvas);
       if (!raw)
         return;
-      s.videos[c].displayed = raw;
       const t = transform(c), loc = p => [t.ox + p[0] * t.scale, t.oy + p[1] * t.scale];
       ctx.drawImage(corrected(cam, raw), t.ox, t.oy, raw.width * t.scale, raw.height * t.scale);
       ctx.strokeStyle = "#83e5bf";
@@ -448,8 +472,11 @@
     });
   }
   function activate(c) {
+    if (c !== s.active)
+      finishDrag(true);
     s.active = c;
     refresh();
+    drawImages();
     queueBackup();
   }
   function finishDrag(commit, advance = false) {
@@ -507,9 +534,10 @@
       changed();
     };
     CanvasTools.navigation(
-        canvas, e => count() && !drag && (e.pointerType === "touch" || e.shiftKey || e.button === 1),
+        canvas, e => c === s.active && count() && !drag &&
+            (e.pointerType === "touch" || e.shiftKey || e.button === 1),
         (a, b, k) => {
-          if (!drag)
+          if (c === s.active && !drag)
             navigateImage(c, a, b, k);
         },
         null, changed, () => activate(c), () => historyStep(true));
@@ -524,7 +552,8 @@
     }, {passive: false});
     canvas.oncontextmenu = e => e.preventDefault();
     canvas.addEventListener("pointerdown", e => {
-      if (!s.ready || busyPair || drag || e.pointerType === "touch" || e.button !== 0 || e.shiftKey)
+      if (c !== s.active || !s.ready || busyPair || drag || e.pointerType === "touch" ||
+          e.button !== 0 || e.shiftKey)
         return;
       const screen = CanvasTools.pos(canvas, e), p = world(c, screen), v = s.videos[c];
       if (p[0] < 0 || p[1] < 0 || p[0] > v.width || p[1] > v.height)
@@ -618,11 +647,13 @@
                              camera: c + 1,
                              calibrationIndex: c,
                              name: v.name,
+                             fileSize: v.file.size,
                              contentTag: v.contentTag,
                              width: v.width,
                              height: v.height,
                              frameCount: v.frameCount,
-                             fps: 30,
+                             fps: v.fps,
+                             variableFrameRate: v.variableFrameRate,
                              duration: v.duration
                            })),
       frameStep: s.frameStep,
@@ -630,7 +661,7 @@
       centerAfterPoint: false,
       trailFrames: s.trail,
       gamma: s.gamma,
-      defaultFps: 30,
+      defaultFps: s.videos[0]?.fps ?? null,
       display: {
         ...s.extra.display,
         images: s.views,
@@ -638,7 +669,6 @@
         axes: s.axes,
         scope: s.scope,
         radius: s.radius,
-        tab: s.tab,
         split: s.split,
         otherNames: s.otherNames,
         nudge: s.step
@@ -653,7 +683,7 @@
     }
     return data;
   }
-  function validateSources(raw) {
+  function validateSources(raw, sources = s.videos) {
     const videos = raw?.videos;
     if (!Array.isArray(videos) || ![1, 2].includes(videos.length))
       throw Error("動画名・寸法・総フレーム数を含む保存JSONが必要です");
@@ -663,7 +693,7 @@
     const slots = videos.map((saved, i) => {
       if (!single)
         return i;
-      const candidates = s.videos.flatMap(
+      const candidates = sources.flatMap(
           (v, c) =>
               v.name === saved?.name && ["width", "height", "frameCount"].every(k => v[k] === saved[k]) ?
               [c] :
@@ -671,7 +701,7 @@
       return candidates.length === 2 ? s.active : candidates[0];
     });
     videos.forEach((saved, i) => {
-      const v = s.videos[slots[i]];
+      const v = sources[slots[i]];
       if (!v || !saved || saved.name !== v.name)
         throw Error(
             "動画の割り当てが異なります。保存時の Camera " + (i + 1) + " は " + (saved?.name ?? "不明") +
@@ -680,35 +710,75 @@
         if (saved[k] !== v[k])
           throw Error(
               v.name + " の " + k + " が異なります（JSON " + saved[k] + " ／ 動画 " + v[k] + "）");
-      if (saved.contentTag && saved.contentTag !== v.contentTag)
+      // Old same-name projects used a whole-file CRC. Do not rescan gigabytes to compare it.
+      // Compare sampled tags when available; keep old projects usable with explicit assignment.
+      const legacySize = /^crc32-(\d+)-/.exec(saved.contentTag || "")?.[1];
+      if ((saved.fileSize != null && saved.fileSize !== v.file.size) ||
+          (legacySize && Number(legacySize) !== v.file.size) ||
+          (saved.contentTag?.startsWith("sample-crc32-") && saved.contentTag !== v.contentTag))
         throw Error("Camera " + (i + 1) + " の動画の内容が保存時と異なります");
       if (raw.version === 2 &&
-          (saved.camera !== i + 1 || saved.calibrationIndex !== i || saved.fps !== 30))
-        throw Error("保存時のカメラまたは再生fpsが不正です");
+          (saved.camera !== i + 1 || saved.calibrationIndex !== i))
+        throw Error("保存時のカメラ割り当てが不正です");
     });
     return slots;
   }
-  function prepareImport(raw) {
+  function annotationShape(raw) {
     if (!raw || (raw.schema && raw.schema !== "clickiPad.annotation") ||
         ![1, 2].includes(raw.version ?? 1))
       throw Error("対応する打点JSON version 1 / 2 が必要です");
-    const slots = validateSources(raw), ids = raw.n_point ?? raw.idCount ?? raw.x?.[0]?.length;
+    if (!Array.isArray(raw.videos) || ![1, 2].includes(raw.videos.length) ||
+        (raw.version === 2 && raw.videos.length !== 2) ||
+        raw.videos.some(v => !v || typeof v.name !== "string" || !v.name ||
+            ["width", "height", "frameCount"].some(k => !Number.isSafeInteger(v[k]) || v[k] < 1)))
+      throw Error("動画名・寸法・総フレーム数を含む保存JSONが必要です");
+    const ids = raw.n_point ?? raw.idCount ?? raw.x?.[0]?.length;
     if (!Number.isSafeInteger(ids) || ids < 1)
       throw Error("ID数が不正です");
     for (const axis of ["x", "y"]) {
-      if (!Array.isArray(raw[axis]) || raw[axis].length !== slots.length)
+      if (!Array.isArray(raw[axis]) || raw[axis].length !== raw.videos.length)
         throw Error(axis + " のカメラ数が不正です");
-      for (const rows of raw[axis]) {
+      for (const [c, rows] of raw[axis].entries()) {
         if (!Array.isArray(rows) || rows.length !== ids)
           throw Error(axis + " のID数が不正です");
         for (const row of rows) {
-          if (!Array.isArray(row) || row.length !== count() ||
+          if (!Array.isArray(row) || row.length !== raw.videos[c].frameCount ||
               !row.every(v => v === null || Number.isFinite(v)))
             throw Error(axis + " のフレーム数または座標が不正です");
         }
       }
     }
+    return ids;
+  }
+  function prepareImport(raw, sources = s.videos) {
+    const ids = annotationShape(raw), slots = validateSources(raw, sources);
     return {slots, ids};
+  }
+  async function readAnnotation(raw) {
+    annotationShape(raw);
+    if (count()) {
+      try {
+        validateSources(raw);
+        if (importData(raw)) pendingAnnotation = null;
+        syncSettings();
+        return;
+      } catch (error) {
+        // Do not silently reorder an already open pair or accept different content under one name.
+        if (raw.videos.every(saved => s.videos.some(v => v.name === saved.name))) throw error;
+      }
+    }
+    pendingAnnotation = raw;
+    const candidates = [...new Set([...staged, ...s.videos.map(v => v.file)].filter(Boolean))];
+    for (let c = 0; c < 2; c++) {
+      const expected = raw.videos[c];
+      const matches = candidates.filter(f => f.name === expected?.name &&
+          (expected.fileSize == null || f.size === expected.fileSize));
+      staged[c] = matches.length === 1 && raw.videos.filter(v => v.name === expected.name).length === 1 ?
+          matches[0] : null;
+    }
+    syncSettings();
+    message("打点JSONを読み込みました。表示された動画を選ぶと、打点・キャリブレーションをまとめて復元します");
+    if (staged.every(Boolean)) await loadPair();
   }
   function restoreDisplay(d = {}) {
     s.views = [0, 1].map(i => {
@@ -739,25 +809,25 @@
     });
     s.scope = d.scope === "all" ? "all" : "local";
     s.radius = int(d.radius, 20, 1);
-    s.tab = d.tab === "xyz" ? "xyz" : "distance";
     s.split = clamp(number(d.split, 60), 35, 75);
     s.otherNames = d.otherNames === true;
-    s.step = [0.25, 0.5, 1].includes(d.nudge) ? d.nudge : 0.25;
+    s.step = [0.1, 0.25, 0.5, 1].includes(d.nudge) ? d.nudge : 0.25;
   }
   function importData(raw, recovery = false) {
     const {slots, ids} = prepareImport(raw), single = slots.length === 1;
-    if (s.videos[0].name === s.videos[1].name && !raw.videos.every(v => v.contentTag)) {
+    if (s.videos[0].name === s.videos[1].name &&
+        !raw.videos.every(v => v.contentTag?.startsWith("sample-crc32-"))) {
       const assignment = single ? "編集対象 Camera " + (slots[0] + 1) + " に読み込みます。" :
                                   "保存順を Camera 1、Camera 2 として読み込みます。";
       if (!confirm(
-              "同名動画で、旧JSONに識別情報がありません。" + assignment + "割り当てを確認しましたか？"))
-        return;
+              "同名動画で、旧JSONには現在の方式の識別情報がありません。" + assignment + "割り当てを確認しましたか？"))
+        return false;
     }
     if (s.dirty &&
         !confirm(
             single ? "対応するカメラの打点を読み込んだ内容に置き換えますか？" :
                      "現在の作業を読み込んだ内容に置き換えますか？"))
-      return;
+      return false;
     finishDrag(false);
     const {x, y, ...metadata} = raw;
     if (single) {
@@ -817,6 +887,7 @@
     history.length = 0;
     future.length = 0;
     s.dirty = recovery || single;
+    pendingAnnotation = null;
     configure();
     selectors();
     syncSettings();
@@ -824,6 +895,7 @@
     schedule();
     queueBackup();
     message(recovery ? "自動保存を復元しました" : "打点を読み込みました");
+    return true;
   }
   function backups() {
     const result = [];
@@ -927,7 +999,16 @@
   }
   function updateSlots() {
     document.querySelectorAll(".slotname")
-        .forEach((el, c) => el.textContent = staged[c]?.name || s.videos[c]?.name || "未選択");
+        .forEach((el, c) => {
+          const selected = staged[c]?.name || (!pendingAnnotation && s.videos[c]?.name);
+          const expected = pendingAnnotation?.videos[c]?.name;
+          el.textContent = selected || (expected ? "要選択：" + expected : "未選択");
+          if (selected && expected && selected !== expected) el.textContent += "（保存時：" + expected + "）";
+        });
+    $("pendingProject").hidden = !pendingAnnotation;
+    $("pendingInfo").textContent = pendingAnnotation ?
+        "動画選択後に打点JSONを復元します。" + (pendingAnnotation.calibration ?
+            "キャリブレーションはJSON内のデータを使用します。" : "") : "";
   }
   function syncSettings() {
     updateSlots();
@@ -971,7 +1052,8 @@
     const n = count(), editable = s.ready && !busyPair;
     $("loadPair").disabled = busyPair;
     $("done").disabled = busyPair;
-    $("dialog").inert = busyPair;
+    $("loadInputs").inert = busyPair;
+    $("cancelLoad").hidden = !busyPair;
     $("retry").hidden = !frameError;
     $("total").textContent = "/ " + (n || "—");
     $("slider").max = $("frameNo").max = n || 1;
@@ -982,16 +1064,26 @@
       $(key).disabled = !n || busyPair;
     $("prev").disabled ||= s.wanted === 0;
     $("next").disabled ||= s.wanted === n - 1;
+    $("idPrev").disabled = busyPair || s.id === 0;
+    $("idNext").disabled = busyPair || s.id === s.names.length - 1;
+    $("railId").textContent = "対象 " + (s.id + 1);
+    $("railId").title = name(s.id);
     $("undo").disabled = !editable || !history.length;
     $("redo").disabled = !editable || !future.length;
     $("save").textContent = s.dirty ? "保存 •" : "保存";
     $("activeLabel").textContent = "C" + (s.active + 1) + " 微調整";
+    $("gamma").value = s.gamma;
+    $("gammaValue").textContent = s.gamma.toFixed(2);
+    $("gamma").disabled = $("gammaReset").disabled = !n || busyPair;
     const selected = observation(s.active, s.id, s.frame);
     document.querySelectorAll("[data-dx],#deletePoint")
         .forEach(b => b.disabled = !editable || !selected);
     cameras.forEach((cam, c) => {
       const v = s.videos[c];
       cam.panel.classList.toggle("active", c === s.active);
+      cam.panel.hidden = c !== s.active;
+      $("camera" + c).setAttribute("aria-pressed", c === s.active);
+      $("camera" + c).disabled = busyPair;
       cam.panel.querySelector(".filename").textContent = v?.name || "未読込";
       cam.panel.querySelector(".filename").title = v?.name || "";
       cam.panel.querySelector(".empty").hidden = !!v;
@@ -1001,8 +1093,6 @@
     $("dist").textContent = value(dist(s.id, s.frame));
     $("scope").value = s.scope;
     $("scope").options[0].textContent = "前後 " + s.radius + " F";
-    $("distanceTab").setAttribute("aria-pressed", s.tab === "distance");
-    $("xyzTab").setAttribute("aria-pressed", s.tab === "xyz");
     const status =
         frameError || backupError || (n && !s.ready ? "F " + (s.wanted + 1) + " 読込中…" : reason());
     $("status").textContent = status;
@@ -1054,8 +1144,47 @@
         e.preventDefault();
     };
     $("loadPair").onclick = loadPair;
+    $("cancelLoad").onclick = () => {
+      loadController?.abort();
+      message("読み込みを中止しています…");
+    };
+    $("cancelPending").onclick = () => {
+      pendingAnnotation = null;
+      syncSettings();
+      message("打点JSONの復元待ちを解除しました");
+    };
+    $("pairFiles").onchange = async e => {
+      const files = [...e.target.files];
+      e.target.value = "";
+      if (!files.length) return;
+      if (files.length !== 2) { message("動画を2本選択してください"); return; }
+      if (pendingAnnotation?.videos.length === 2) {
+        const expected = pendingAnnotation.videos;
+        if (expected[0].name === expected[1].name) {
+          message("保存時の動画名が同じです。Camera 1・2 の「MP4を選ぶ」でそれぞれ指定してください");
+          return;
+        }
+        const ordered = expected.map(v => files.find(f => f.name === v.name));
+        if (!ordered.every(Boolean) || new Set(ordered).size !== 2) {
+          message("保存された動画名に一致する2本を選択してください");
+          return;
+        }
+        staged.splice(0, 2, ...ordered);
+      } else staged.splice(0, 2, ...files);
+      updateSlots();
+      if (pendingAnnotation) await loadPair();
+      else message("Camera 1・2 の割り当てを確認して「2本を開く」を押してください");
+    };
     $("prev").onclick = () => frameStep(-1);
     $("next").onclick = () => frameStep(1);
+    for (const [key, delta] of [["idPrev", -1], ["idNext", 1]])
+      $(key).onclick = () => {
+        finishDrag(true);
+        selectId(clamp(s.id + delta, 0, s.names.length - 1));
+        changed();
+      };
+    for (let c = 0; c < 2; c++)
+      $("camera" + c).onclick = () => activate(c);
     $("retry").onclick = () => go(s.wanted);
     $("frameNo").onchange = e => {
       go(Number(e.target.value) - 1);
@@ -1096,9 +1225,7 @@
       if (!file)
         return;
       try {
-        if (!count())
-          throw Error("先に動画ペアを開いてください");
-        importData(JSON.parse(await file.text()));
+        await readAnnotation(JSON.parse(await file.text()));
       } catch (err) {
         message(err.message);
       }
@@ -1177,11 +1304,12 @@
       layout();
       changed();
     };
-    $("gamma").onchange = e => {
-      s.gamma = clamp(number(e.target.valueAsNumber, 1), 0.1, 2);
-      e.target.value = s.gamma;
+    function setGamma(value) {
+      s.gamma = clamp(number(value, 1), 0.1, 2);
       changed();
-    };
+    }
+    $("gamma").oninput = e => setGamma(e.target.valueAsNumber);
+    $("gammaReset").onclick = () => setGamma(1);
     $("otherNames").onchange = e => {
       s.otherNames = e.target.checked;
       changed();
@@ -1190,19 +1318,8 @@
       s.scope = e.target.value;
       changed();
     };
-    $("distanceTab").onclick = () => {
-      s.tab = "distance";
-      changed();
-    };
-    $("xyzTab").onclick = () => {
-      s.tab = "xyz";
-      changed();
-    };
     $("fitAxes").onclick = () => {
-      if (s.tab === "distance")
-        s.axes[3] = null;
-      else
-        s.axes.splice(0, 3, null, null, null);
+      s.axes = [];
       changed();
     };
     $("fit3d").onclick = () => {

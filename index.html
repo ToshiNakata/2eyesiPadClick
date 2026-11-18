@@ -2,9 +2,9 @@
 <html lang="ja"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>clickiPad · 2視点打点</title>
-  <link rel="stylesheet" href="styles.css?v=20261118-portrait">
-  <script defer src="stereo.js"></script><script defer src="media.js?v=20261118-frames"></script>
-  <script defer src="plots.js?v=20261118-portrait"></script><script defer src="app.js?v=20261118-portrait"></script>
+  <link rel="stylesheet" href="styles.css?v=20261118-loading">
+  <script defer src="stereo.js"></script><script defer src="media.js?v=20261118-loading"></script>
+  <script defer src="plots.js?v=20261118-portrait"></script><script defer src="app.js?v=20261118-loading"></script>
 </head><body>
 <div id="videoPool" aria-hidden="true"></div>
 <main id="workspace">
@@ -24,6 +24,10 @@
         <button id="camera0" aria-label="Camera 1を表示" aria-pressed="true"><small>Camera</small><span>1</span></button>
         <button id="camera1" aria-label="Camera 2を表示" aria-pressed="false"><small>Camera</small><span>2</span></button>
       </div>
+      <div class="rail-group id-controls" role="group" aria-label="対象ID切替">
+        <small id="railId">対象 1</small>
+        <button id="idPrev" aria-label="前の対象ID">−</button><button id="idNext" aria-label="次の対象ID">＋</button>
+      </div>
     </nav>
     <div class="cameras" id="cameras"></div>
     <div class="transport">
@@ -40,7 +44,7 @@
   </section>
   <div class="editbar">
     <div class="group"><b id="activeLabel">C1 微調整</b>
-      <select id="nudgeStep" aria-label="微調整量"><option>0.25</option><option>0.5</option><option>1</option></select><span>px</span>
+      <select id="nudgeStep" aria-label="微調整量"><option>0.1</option><option selected>0.25</option><option>0.5</option><option>1</option></select><span>px</span>
       <button data-dx="-1" data-dy="0" aria-label="左へ微調整">←</button><button data-dx="1" data-dy="0" aria-label="右へ微調整">→</button>
       <button data-dx="0" data-dy="-1" aria-label="上へ微調整">↑</button><button data-dx="0" data-dy="1" aria-label="下へ微調整">↓</button>
       <button id="deletePoint">削除</button></div>
@@ -67,13 +71,16 @@
   <div class="panelhead"><h2></h2><span class="filename"></span><button class="center">中央</button><button class="home">全景</button></div>
   <div class="viewport image"><canvas></canvas><button class="empty">MP4を選ぶ</button><span class="pixel"></span></div>
 </section></template>
-<dialog id="dialog"><div class="dialoghead"><h1>作業設定</h1><button id="done">閉じる</button></div>
+<dialog id="dialog"><div class="dialoghead"><h1>作業設定</h1><div class="group"><button id="cancelLoad" hidden>読込を中止</button><button id="done">閉じる</button></div></div>
   <div id="message" role="status"></div>
+  <div id="loadInputs">
   <section><h3>動画の割り当て</h3>
+    <div id="pendingProject" hidden><small id="pendingInfo"></small><button id="cancelPending">復元待ちを解除</button></div>
+    <label class="filebutton">動画2本をまとめて選ぶ<input id="pairFiles" type="file" accept=".mp4,video/mp4" multiple></label>
     <div id="fileSlots"></div><div class="row"><small>同じフレーム数のMP4を指定</small><button id="loadPair" class="primary">2本を開く</button></div>
   </section>
   <section><h3>打点データ</h3><div class="row"><label class="filebutton">打点JSONを読む<input id="annotationFile" type="file" accept=".json,application/json"></label>
-    <button id="restore">自動保存から復元</button></div><small id="backupInfo"></small></section>
+    <button id="restore">自動保存から復元</button></div><small>打点JSONから先に開けます。保存された動画名を表示し、動画選択後に打点とキャリブレーションを復元します。</small><small id="backupInfo"></small></section>
   <section><h3>キャリブレーション</h3><div class="row"><label class="filebutton">キャリブJSONを読む<input id="calibFile" type="file" accept=".json,application/json"></label><span id="calibName"></span></div>
     <div id="geometry"></div><div class="row"><label>長さ単位（t と同じ） <input id="unit" type="text" placeholder="未設定"></label>
     <button id="applyGeometry">寸法・変換を適用</button></div><small id="geometryStatus"></small></section>
@@ -85,5 +92,6 @@
     <label>局所範囲 ± F <input type="number" min="1" id="radius" value="20"></label><label>動画欄の高さ配分 <input type="range" id="split" min="35" max="75" value="60"></label>
     <label><input type="checkbox" id="otherNames"> 3Dに他の点の名前を表示</label><button id="missing">次の未入力へ</button>
     </div><small>Pencil・マウスで選択IDを打点。指で画像をパン・ピンチ。3Dはドラッグで回転、2本指またはShift＋ドラッグで移動。ホイール・ピンチで拡大縮小。</small></section>
+  </div>
 </dialog>
 </body></html>
