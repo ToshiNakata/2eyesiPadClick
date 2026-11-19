@@ -204,16 +204,23 @@ function createPlots(s, api) {
     const current = api.xyz(s.id, f), reference = api.xyz(ref, f);
     if (current && reference)
       line(project(current), project(reference), refColor);
-    function show(id, p, r, color, diamond, label) {
+    function show(id, p, r, color, diamond, includeName) {
       if (!p)
         return;
       any = true;
       const [x, y] = project(p);
       CanvasTools.marker(ctx, x, y, r, color, diamond);
-      if (label) {
-        ctx.fillStyle = color;
-        ctx.fillText(api.name(id), x + 7, y + (diamond ? 14 : -7));
-      }
+      // IDs remain visible for every current-frame point, including old JSONs whose
+      // otherNames setting is false. That setting only controls the additional point name.
+      const label = includeName ? api.name(id) : String(id + 1), labelY = y + (diamond ? 14 : -7);
+      ctx.save();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 3;
+      ctx.lineJoin = "round";
+      ctx.strokeText(label, x + 7, labelY);
+      ctx.fillStyle = id === s.id || id === ref ? color : "#52625a";
+      ctx.fillText(label, x + 7, labelY);
+      ctx.restore();
     }
     for (let id = 0; id < s.names.length; id++)
       if (id !== s.id && id !== ref)

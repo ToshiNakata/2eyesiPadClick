@@ -4,7 +4,7 @@
   <title>clickiPad · 2視点打点</title>
   <link rel="stylesheet" href="styles.css?v=20261118-loading">
   <script defer src="stereo.js?v=20261119-epipolar"></script><script defer src="media.js?v=20261118-media-errors"></script>
-  <script defer src="plots.js?v=20261118-portrait"></script><script defer src="app.js?v=20261119-epipolar"></script>
+  <script defer src="plots.js?v=20261119-point-ids"></script><script defer src="app.js?v=20261119-epipolar"></script>
 </head><body>
 <div id="videoPool" aria-hidden="true"></div>
 <main id="workspace">
@@ -92,7 +92,7 @@
     <label>フレーム移動幅 <input type="number" min="1" id="frameStep" value="1"></label>
     <label>2D軌跡の長さ <input type="number" min="0" id="trail" value="5"></label>
     <label>局所範囲 ± F <input type="number" min="1" id="radius" value="20"></label><label>動画欄の高さ配分 <input type="range" id="split" min="35" max="75" value="60"></label>
-    <label><input type="checkbox" id="otherNames"> 3Dに他の点の名前を表示</label><button id="missing">次の未入力へ</button>
+    <label><input type="checkbox" id="otherNames"> 3Dで他の点の名前も表示（IDは常時表示）</label><button id="missing">次の未入力へ</button>
     </div><small>Pencil・マウスで選択IDを打点。指で画像をパン・ピンチ。3Dはドラッグで回転、2本指またはShift＋ドラッグで移動。ホイール・ピンチで拡大縮小。</small></section>
   </div>
 </dialog>
