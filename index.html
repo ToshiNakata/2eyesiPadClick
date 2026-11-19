@@ -3,8 +3,8 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>clickiPad · 2視点打点</title>
   <link rel="stylesheet" href="styles.css?v=20261118-loading">
-  <script defer src="stereo.js"></script><script defer src="media.js?v=20261118-loading"></script>
-  <script defer src="plots.js?v=20261118-portrait"></script><script defer src="app.js?v=20261118-loading"></script>
+  <script defer src="stereo.js?v=20261119-epipolar"></script><script defer src="media.js?v=20261118-media-errors"></script>
+  <script defer src="plots.js?v=20261118-portrait"></script><script defer src="app.js?v=20261119-epipolar"></script>
 </head><body>
 <div id="videoPool" aria-hidden="true"></div>
 <main id="workspace">
@@ -83,7 +83,9 @@
     <button id="restore">自動保存から復元</button></div><small>打点JSONから先に開けます。保存された動画名を表示し、動画選択後に打点とキャリブレーションを復元します。</small><small id="backupInfo"></small></section>
   <section><h3>キャリブレーション</h3><div class="row"><label class="filebutton">キャリブJSONを読む<input id="calibFile" type="file" accept=".json,application/json"></label><span id="calibName"></span></div>
     <div id="geometry"></div><div class="row"><label>長さ単位（t と同じ） <input id="unit" type="text" placeholder="未設定"></label>
-    <button id="applyGeometry">寸法・変換を適用</button></div><small id="geometryStatus"></small></section>
+    <button id="applyGeometry">寸法・変換を適用</button></div><small id="geometryStatus"></small>
+    <label class="row"><input type="checkbox" id="epipolar"> エピポーララインを表示</label>
+    <small>選択中のID・同じフレームの反対側カメラの打点から、黄色の破線を表示します。キャリブレーションと反対側の打点が必要です。レンズの歪みに応じて曲線になります。</small></section>
   <section><h3>打点とフレーム送り</h3><div class="fields">
     <label>ID数 <input type="number" id="idCount" min="1" value="10"></label><label>選択中のID名 <input id="pointName" type="text" placeholder="未設定"></label>
     <label>新規打点後 <select id="advance"><option value="none">自動送りなし</option><option value="frame">フレーム送り</option><option value="id">ID送り</option></select></label>

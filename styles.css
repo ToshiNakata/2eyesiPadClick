@@ -105,14 +105,20 @@ button.primary:hover:not(:disabled),button[aria-pressed=true]:hover {
   grid-row: 1 / -1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 24px;
+  justify-content: flex-start;
+  min-height: 0;
+  overflow-y: auto;
+  gap: 16px;
 }
 
 .rail-group {
   display: grid;
+  flex-shrink: 0;
   gap: 8px;
 }
+
+.rail-group:first-child { margin-top: auto; }
+.rail-group:last-child { margin-bottom: auto; }
 
 .rail-group button {
   display: flex;
@@ -131,6 +137,28 @@ button.primary:hover:not(:disabled),button[aria-pressed=true]:hover {
 
 .rail-group small {
   font-size: 13px;
+}
+
+.id-controls {
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.id-controls small {
+  grid-column: 1 / -1;
+  text-align: center;
+}
+
+.id-controls button {
+  min-height: 44px;
+  padding: 2px;
+  font-size: 22px;
+}
+
+@media (max-height: 800px) and (min-width: 641px) {
+  .side-controls { gap: 8px; }
+  .rail-group { gap: 4px; }
+  .rail-group button { min-height: 48px; }
 }
 
 .cameras {
@@ -576,6 +604,7 @@ dialog small {
 }
 
 #message:not(:empty) {
+  white-space: pre-line;
   margin-top: 12px;
   background: #fcf0d9;
   color: #5e4417;

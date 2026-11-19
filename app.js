@@ -31,6 +31,7 @@
     axes: [],
     split: 60,
     otherNames: false,
+    epipolar: false,
     calib: null,
     calibName: "",
     unit: "",
@@ -44,7 +45,7 @@
   const cameras = [], staged = [null, null], history = [], future = [];
   const backupKey = "clickiPad.stereo.autosave.v2", oldKey = "clickiPad.autosave.v1";
   let geometry = null, maps = null, geometryError = "", xyzCache = [], distanceCache = [],
-      rangeJob = null;
+      rangeJob = null, epipolarCache = null;
   let drag = null, busyPair = false, queue = null, running = false, generation = 0, frameError = "",
       backupError = "", autosaveTimer, drawTicket, loadController = null, pendingAnnotation = null;
   const plots = createPlots(
@@ -84,6 +85,7 @@
     return !count() ? "2本の動画を開いてください" : geometryError || result(s.id, s.frame)?.reason || "";
   }
   function configure(resetView = false) {
+    epipolarCache = null;
     xyzCache = [];
     distanceCache = [];
     geometry = null;
@@ -422,6 +424,7 @@
         return;
       const t = transform(c), loc = p => [t.ox + p[0] * t.scale, t.oy + p[1] * t.scale];
       ctx.drawImage(corrected(cam, raw), t.ox, t.oy, raw.width * t.scale, raw.height * t.scale);
+      drawEpipolar(ctx, c, t, raw);
       ctx.strokeStyle = "#83e5bf";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -470,6 +473,41 @@
       const p = observation(c, s.id, s.frame);
       cam.pixel.textContent = p ? p.map(v => v.toFixed(2)).join(", ") + " px" : "";
     });
+  }
+  function drawEpipolar(ctx, c, t, raw) {
+    if (!s.epipolar || !geometry)
+      return;
+    const other = 1-c, point = observation(other, s.id, s.frame);
+    if (!point)
+      return;
+    const key = [c, s.id, s.frame, ...point].join(",");
+    if (epipolarCache?.key !== key) {
+      const curve = Stereo.epipolarCurve(geometry, other, maps[other](point),
+                                        [maps[c]([0,0]), maps[c]([raw.width,raw.height])]);
+      const cfg = s.configs[c];
+      epipolarCache = {key, curve: curve.map(p => p && (cfg.mode === "affine" ?
+          [(p[0]-cfg.ox)/cfg.sx, (p[1]-cfg.oy)/cfg.sy] : p))};
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(t.ox, t.oy, raw.width*t.scale, raw.height*t.scale);
+    ctx.clip();
+    ctx.beginPath();
+    let pen = false;
+    for (const p of epipolarCache.curve) {
+      if (!p) { pen = false; continue; }
+      const q = [t.ox+p[0]*t.scale, t.oy+p[1]*t.scale];
+      if (pen) ctx.lineTo(...q); else ctx.moveTo(...q);
+      pen = true;
+    }
+    ctx.setLineDash([7,5]);
+    ctx.strokeStyle = "#142922";
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+    ctx.strokeStyle = "#ffd45a";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
   }
   function activate(c) {
     if (c !== s.active)
@@ -671,6 +709,7 @@
         radius: s.radius,
         split: s.split,
         otherNames: s.otherNames,
+        epipolar: s.epipolar,
         nudge: s.step
       }
     };
@@ -811,6 +850,7 @@
     s.radius = int(d.radius, 20, 1);
     s.split = clamp(number(d.split, 60), 35, 75);
     s.otherNames = d.otherNames === true;
+    s.epipolar = d.epipolar === true;
     s.step = [0.1, 0.25, 0.5, 1].includes(d.nudge) ? d.nudge : 0.25;
   }
   function importData(raw, recovery = false) {
@@ -1037,6 +1077,7 @@
          }))
       $(key).value = value;
     $("otherNames").checked = s.otherNames;
+    $("epipolar").checked = s.epipolar;
     const backup = availableBackup(!!count());
     $("restore").disabled = !count() || !backup;
     $("backupInfo").textContent = backup ?
@@ -1312,6 +1353,10 @@
     $("gammaReset").onclick = () => setGamma(1);
     $("otherNames").onchange = e => {
       s.otherNames = e.target.checked;
+      changed();
+    };
+    $("epipolar").onchange = e => {
+      s.epipolar = e.target.checked;
       changed();
     };
     $("scope").onchange = e => {

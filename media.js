@@ -187,6 +187,17 @@ const StereoMedia = (() => {
         presentationSerial = 0;
     const cache = new Map();
     const video = {name: file.name, element, frame, close};
+    function playbackError() {
+      const error = element.error;
+      const reason = {
+        1: "動画の読み込みが中断されました",
+        2: "動画ファイルを読み取れません。端末へのダウンロードを確認してください",
+        3: "動画のデコードに失敗しました。端末が対応する動画形式か確認してください",
+        4: "このブラウザで動画を開けません。対応形式またはファイルの読み取りを確認してください"
+      }[error?.code] || "動画を読み込めませんでした";
+      return Error(reason + (error ? "（MediaError " + error.code +
+          (error.message ? ": " + error.message : "") + "）" : ""));
+    }
     function close() {
       if (disposed) return;
       disposed = true;
@@ -270,7 +281,7 @@ const StereoMedia = (() => {
           reject(e);
         }
         function onError() {
-          fail(Error(video.name + "：動画のデコードに失敗しました"));
+          fail(Error(video.name + "：" + playbackError().message));
         }
         function aborted() { fail(Error("読み込みを中止しました")); }
         function seeked() {
@@ -335,7 +346,7 @@ const StereoMedia = (() => {
         };
         element.onerror = () => {
           stop();
-          reject(Error("このブラウザで再生できません"));
+          reject(playbackError());
         };
         controller.signal.addEventListener("abort", abort, {once: true});
         if (controller.signal.aborted) { abort(); return; }
