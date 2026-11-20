@@ -203,6 +203,52 @@ const Stereo = (() => {
   function distance(a, b) {
     return a && b ? Math.hypot(...a.map((x, i) => x - b[i])) : null;
   }
+  // World XYZ -> distorted calibration-image pixels (the inverse of undistort + DLT).
+  function project(camera, xyz) {
+    if (!camera || !shape(xyz, [3]))
+      return null;
+    const q = multiply(camera.P, [...xyz, 1]);
+    if (!q.every(Number.isFinite) || q[2] <= 1e-12)
+      return null;
+    return distort([q[0] / q[2], q[1] / q[2]], camera);
+  }
+  // Natural cubic spline of XYZ against frame number. No extrapolation or smoothing.
+  // Solve the tridiagonal system for second derivatives, once per changed trajectory.
+  function temporalSpline(frames, points) {
+    const n = frames.length;
+    if (n < 2 || !shape(points, [n, 3]) ||
+        !frames.every((f, i) => Number.isFinite(f) && (!i || f > frames[i - 1])))
+      return null;
+    const h = frames.slice(1).map((f, i) => f - frames[i]);
+    const upper = Array(n).fill(0), second = Array.from({length: n}, () => [0, 0, 0]);
+    for (let i = 1; i < n - 1; i++) {
+      const diagonal = 2 * (h[i - 1] + h[i]) - h[i - 1] * upper[i - 1];
+      upper[i] = h[i] / diagonal;
+      for (let j = 0; j < 3; j++) {
+        const rhs = 6 * ((points[i + 1][j] - points[i][j]) / h[i] -
+                         (points[i][j] - points[i - 1][j]) / h[i - 1]);
+        second[i][j] = (rhs - h[i - 1] * second[i - 1][j]) / diagonal;
+      }
+    }
+    for (let i = n - 2; i > 0; i--)
+      for (let j = 0; j < 3; j++) second[i][j] -= upper[i] * second[i + 1][j];
+    return f => {
+      if (!Number.isFinite(f) || f < frames[0] || f > frames[n - 1])
+        return null;
+      let lo = 0, hi = n - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (frames[mid] <= f) lo = mid;
+        else hi = mid;
+      }
+      if (f === frames[lo]) return points[lo].slice();
+      if (f === frames[hi]) return points[hi].slice();
+      const a = (frames[hi] - f) / h[lo], b = 1 - a;
+      const p = points[lo].map((v, j) => a * v + b * points[hi][j] + h[lo] ** 2 / 6 *
+          ((a ** 3 - a) * second[lo][j] + (b ** 3 - b) * second[hi][j]));
+      return p.every(Number.isFinite) ? p : null;
+    };
+  }
   function imageSizes(raw) {
     let sizes =
         raw?.imageSizes ?? raw?.image_sizes ?? raw?.imageSize ?? raw?.image_size ?? raw?.resolution;
@@ -235,7 +281,7 @@ const Stereo = (() => {
     return p => p;
   }
   return {calibration, triangulate, undistort, distort, epipolarLine, epipolarCurve,
-          distance, imageSizes, coordinateMap};
+          distance, project, temporalSpline, imageSizes, coordinateMap};
 })();
 if (typeof module !== "undefined")
   module.exports = Stereo;

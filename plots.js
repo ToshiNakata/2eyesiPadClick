@@ -87,7 +87,12 @@ const CanvasTools = (() => {
     for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
       canvas.addEventListener(type, finish);
   }
-  function marker(ctx, x, y, r, color, diamond = false) {
+  function pale(color) {
+    return "#" + color.slice(1).match(/../g)
+        .map(v => Math.round(parseInt(v, 16) * 0.55 + 255 * 0.45).toString(16).padStart(2, "0")).join("");
+  }
+  function marker(ctx, x, y, r, color, diamond = false, interpolated = false) {
+    ctx.save();
     ctx.beginPath();
     if (diamond) {
       ctx.moveTo(x, y - r);
@@ -97,13 +102,17 @@ const CanvasTools = (() => {
       ctx.closePath();
     } else
       ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1;
+    if (!interpolated) {
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    ctx.strokeStyle = interpolated ? pale(color) : "#ffffff";
+    ctx.lineWidth = interpolated ? 1.8 : 1;
+    ctx.setLineDash(interpolated ? [2, 2] : []);
     ctx.stroke();
+    ctx.restore();
   }
-  return {surface, pos, navigation, marker};
+  return {surface, pos, navigation, marker, pale};
 })();
 
 function createPlots(s, api) {
@@ -192,33 +201,39 @@ function createPlots(s, api) {
       }
       const p = project(xyz);
       any = true;
-      if (prev)
-        line(prev, p, targetColor, i > f ? [4, 3] : []);
-      ctx.fillStyle = targetColor;
-      ctx.beginPath();
-      ctx.arc(...p, 2, 0, 2 * Math.PI);
-      ctx.fill();
+      const estimated = api.interpolated(s.id, i);
+      if (prev) {
+        const mixed = estimated || api.interpolated(s.id, i - 1);
+        line(prev, p, mixed ? CanvasTools.pale(targetColor) : targetColor,
+            mixed || i > f ? [4, 3] : []);
+      }
+      CanvasTools.marker(ctx, ...p, 2, targetColor, false, estimated);
       hits.push({p, i});
       prev = p;
     }
     const current = api.xyz(s.id, f), reference = api.xyz(ref, f);
-    if (current && reference)
-      line(project(current), project(reference), refColor);
+    if (current && reference) {
+      const estimated = api.distanceInterpolated(s.id, f);
+      line(project(current), project(reference), estimated ? CanvasTools.pale(refColor) : refColor,
+          estimated ? [4, 3] : []);
+    }
     function show(id, p, r, color, diamond, includeName) {
       if (!p)
         return;
       any = true;
       const [x, y] = project(p);
-      CanvasTools.marker(ctx, x, y, r, color, diamond);
+      const estimated = api.interpolated(id, f);
+      CanvasTools.marker(ctx, x, y, r, color, diamond, estimated);
       // IDs remain visible for every current-frame point, including old JSONs whose
       // otherNames setting is false. That setting only controls the additional point name.
-      const label = includeName ? api.name(id) : String(id + 1), labelY = y + (diamond ? 14 : -7);
+      const label = (includeName ? api.name(id) : String(id + 1)) + (estimated ? " 補間" : ""),
+            labelY = y + (diamond ? 14 : -7);
       ctx.save();
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 3;
       ctx.lineJoin = "round";
       ctx.strokeText(label, x + 7, labelY);
-      ctx.fillStyle = id === s.id || id === ref ? color : "#52625a";
+      ctx.fillStyle = estimated ? "#637c71" : id === s.id || id === ref ? color : "#52625a";
       ctx.fillText(label, x + 7, labelY);
       ctx.restore();
     }
@@ -233,6 +248,9 @@ function createPlots(s, api) {
     if (channel === 3)
       return api.dist(s.id, i);
     return api.xyz(s.id, i)?.[channel] ?? null;
+  }
+  function estimatedSample(channel, i) {
+    return channel === 3 ? api.distanceInterpolated(s.id, i) : api.interpolated(s.id, i);
   }
   function bounds(channel, lo, hi) {
     let min = Infinity, max = -Infinity;
@@ -291,26 +309,35 @@ function createPlots(s, api) {
       ctx.strokeStyle = colors[ch];
       ctx.fillStyle = colors[ch];
       ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      let fresh = true, any = false;
+      let previous = null, any = false;
       for (let i = lo; api.enabled() && i <= hi; i++) {
         const v = sample(ch, i);
         if (v == null) {
-          fresh = true;
+          previous = null;
           continue;
         }
         any = true;
-        if (fresh) {
-          ctx.moveTo(x(i), y(v));
+        const estimated = estimatedSample(ch, i), p = [x(i), y(v)];
+        if (previous) {
+          const mixed = previous.estimated || estimated;
+          ctx.strokeStyle = mixed ? CanvasTools.pale(colors[ch]) : colors[ch];
+          ctx.setLineDash(mixed ? [4, 3] : []);
+          ctx.beginPath();
+          ctx.moveTo(...previous.p);
+          ctx.lineTo(...p);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        if (!estimated) {
+          ctx.fillStyle = colors[ch];
           ctx.fillRect(x(i) - 1, y(v) - 1, 2, 2);
-        } else
-          ctx.lineTo(x(i), y(v));
-        fresh = false;
+        }
+        previous = {p, estimated};
       }
-      ctx.stroke();
       const v = sample(ch, s.frame);
+      const estimated = v != null && estimatedSample(ch, s.frame);
       if (v != null)
-        CanvasTools.marker(ctx, x(s.frame), y(v), 4, colors[ch]);
+        CanvasTools.marker(ctx, x(s.frame), y(v), 4, colors[ch], false, estimated);
       ctx.restore();
       ctx.fillStyle = "#65736a";
       if (hi >= lo) {
@@ -321,7 +348,9 @@ function createPlots(s, api) {
       ctx.textAlign = "center";
       ctx.fillText("Frame", (left + right) / 2, h - 6);
       ctx.textAlign = "left";
-      chart.value.textContent = v == null ? "—" : number(v) + " " + (s.unit || "単位未設定");
+      chart.value.textContent = v == null ? "—" : number(v) + " " + (s.unit || "単位未設定") +
+          (estimated ? "（補間）" : "");
+      chart.value.classList.toggle("interpolated-value", estimated);
       chart.value.title = chart.value.textContent;
       chart.hint.textContent = any ? "" : !api.enabled() ? "3D未計算" :
           ch === 3 && s.refs[s.id] == null ? "参照IDを選択" : "表示範囲に打点なし";

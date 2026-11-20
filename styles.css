@@ -708,3 +708,6 @@ legend {
     width: min(300px,75vw);
   }
 }
+.metrics .interpolated-value,.series-panel .interpolated-value { color: #637c71; }
+#interpolationLegend { color: #637c71; }
+#interpolationError { color: #ad3529; }

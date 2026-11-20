@@ -32,6 +32,7 @@
     split: 60,
     otherNames: false,
     epipolar: false,
+    interpolationIds: [],
     calib: null,
     calibName: "",
     unit: "",
@@ -45,18 +46,19 @@
   const cameras = [], staged = [null, null], history = [], future = [];
   const backupKey = "clickiPad.stereo.autosave.v2", oldKey = "clickiPad.autosave.v1";
   let geometry = null, maps = null, geometryError = "", xyzCache = [], distanceCache = [],
-      rangeJob = null, epipolarCache = null;
+      rangeJob = null, epipolarCache = null, splineCache = [];
   let drag = null, busyPair = false, queue = null, running = false, generation = 0, frameError = "",
       backupError = "", autosaveTimer, drawTicket, loadController = null, pendingAnnotation = null;
   const plots = createPlots(
-      s, {count, xyz, dist, name, reason, enabled: () => !!geometry, draw: schedule, go, changed});
+      s, {count, xyz, dist, interpolated, distanceInterpolated, name, reason,
+          enabled: () => !!geometry, draw: schedule, go, changed});
   s.view3 = plots.defaultView();
 
   function observation(c, id, f) {
     const x = s.x[c]?.[id]?.[f], y = s.y[c]?.[id]?.[f];
     return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
   }
-  function result(id, f) {
+  function rawResult(id, f) {
     if (!geometry || id == null || id < 0 || id >= s.names.length || f < 0 || f >= count())
       return null;
     const row = xyzCache[id] ??= [];
@@ -69,8 +71,37 @@
     }
     return row[f];
   }
+  function result(id, f) {
+    const raw = rawResult(id, f);
+    if (!raw || raw.xyz || !s.interpolationIds.includes(id))
+      return raw;
+    if (splineCache[id] === undefined) {
+      const frames = [], points = [];
+      for (let i = 0; i < count(); i++) {
+        if (!observation(0, id, i) || !observation(1, id, i)) continue;
+        const p = rawResult(id, i)?.xyz;
+        if (p) { frames.push(i); points.push(p); }
+      }
+      splineCache[id] = Stereo.temporalSpline(frames, points);
+    }
+    const p = splineCache[id]?.(f);
+    return p ? {xyz: p, interpolated: true, reason: ""} : raw;
+  }
   function xyz(id, f) {
     return result(id, f)?.xyz ?? null;
+  }
+  function interpolated(id, f) {
+    return result(id, f)?.interpolated === true;
+  }
+  function distanceInterpolated(id, f) {
+    return dist(id, f) != null && (interpolated(id, f) || interpolated(s.refs[id], f));
+  }
+  function projected(c, id, f) {
+    const point = result(id, f);
+    if (!point?.interpolated) return null;
+    const p = Stereo.project(geometry[c], point.xyz), cfg = s.configs[c];
+    return p && (cfg.mode === "affine" ?
+        [(p[0] - cfg.ox) / cfg.sx, (p[1] - cfg.oy) / cfg.sy] : p);
   }
   function dist(id, f) {
     const ref = s.refs[id];
@@ -87,6 +118,7 @@
   function configure(resetView = false) {
     epipolarCache = null;
     xyzCache = [];
+    splineCache = [];
     distanceCache = [];
     geometry = null;
     maps = null;
@@ -112,9 +144,14 @@
     s.y[c][id][f] = p?.[1] ?? null;
     if (xyzCache[id])
       delete xyzCache[id][f];
+    // One changed knot can affect every interval of a natural cubic spline.
+    delete splineCache[id];
+    rangeJob = null;
     s.refs.forEach((ref, i) => {
-      if ((i === id || ref === id) && distanceCache[i])
-        delete distanceCache[i][f];
+      if ((i === id || ref === id) && distanceCache[i]) {
+        if (s.interpolationIds.includes(id)) delete distanceCache[i];
+        else delete distanceCache[i][f];
+      }
     });
     schedule();
   }
@@ -167,6 +204,7 @@
     s.names.length = n;
     s.refs.length = n;
     s.refs = s.refs.map(ref => ref != null && ref < n ? ref : null);
+    s.interpolationIds = s.interpolationIds.filter(id => id < n);
     s.id = clamp(s.id, 0, n - 1);
   }
   function selectId(id) {
@@ -446,11 +484,23 @@
       }
       ctx.stroke();
       function mark(id) {
-        const p = observation(c, id, s.frame);
-        if (!p)
-          return;
-        const [x, y] = loc(p), target = id === s.id, ref = id === s.refs[s.id];
+        const p = observation(c, id, s.frame), ghost = projected(c, id, s.frame);
+        const target = id === s.id, ref = id === s.refs[s.id];
         const color = target ? "#34bea0" : ref ? "#ed9c55" : "#b5c3bd";
+        if (ghost && ghost[0] >= 0 && ghost[0] <= raw.width && ghost[1] >= 0 && ghost[1] <= raw.height) {
+          const [x, y] = loc(ghost);
+          CanvasTools.marker(ctx, x, y, target || ref ? 6 : 4, color, ref, true);
+          ctx.save();
+          ctx.strokeStyle = "#142922";
+          ctx.lineWidth = 2.5;
+          const label = name(id) + " 補間";
+          ctx.strokeText(label, x + 8, y - 8);
+          ctx.fillStyle = CanvasTools.pale(color);
+          ctx.fillText(label, x + 8, y - 8);
+          ctx.restore();
+        }
+        if (!p) return;
+        const [x, y] = loc(p), labelY = y + (ghost ? 16 : -6);
         CanvasTools.marker(ctx, x, y, target || ref ? 4 : 2.5, color, ref);
         if (target) {
           ctx.beginPath();
@@ -461,17 +511,18 @@
         const label = name(id);
         ctx.strokeStyle = "#142922";
         ctx.lineWidth = 2.5;
-        ctx.strokeText(label, x + 7, y - 6);
+        ctx.strokeText(label, x + 7, labelY);
         ctx.fillStyle = "#fff";
-        ctx.fillText(label, x + 7, y - 6);
+        ctx.fillText(label, x + 7, labelY);
       }
       s.names.forEach((_, i) => {
         if (i !== s.id)
           mark(i);
       });
       mark(s.id);
-      const p = observation(c, s.id, s.frame);
-      cam.pixel.textContent = p ? p.map(v => v.toFixed(2)).join(", ") + " px" : "";
+      const actual = observation(c, s.id, s.frame), p = actual || projected(c, s.id, s.frame);
+      cam.pixel.textContent = p ? p.map(v => v.toFixed(2)).join(", ") + " px" +
+          (actual ? "" : "（補間・再投影）") : "";
     });
   }
   function drawEpipolar(ctx, c, t, raw) {
@@ -668,6 +719,8 @@
       currentReference: s.refs[s.id],
       pointNames: s.names,
       references: s.refs,
+      interpolation: {method: "natural-cubic", ids: s.interpolationIds.map(id => id + 1),
+                      space: "world", timeAxis: "frame", extrapolate: false},
       x: s.x,
       y: s.y,
       calibration: s.calib,
@@ -922,8 +975,12 @@
     s.advance = ["frame", "id"].includes(raw.autoAdvance) ? raw.autoAdvance : "none";
     s.trail = int(raw.trailFrames, 5);
     s.gamma = clamp(number(raw.gamma, 1), 0.1, 2);
-    if (!single)
+    if (!single) {
       restoreDisplay(raw.display || {});
+      s.interpolationIds = raw.interpolation?.method === "natural-cubic" &&
+          Array.isArray(raw.interpolation.ids) ? [...new Set(raw.interpolation.ids
+              .filter(id => Number.isInteger(id) && id >= 1 && id <= ids).map(id => id - 1))] : [];
+    }
     history.length = 0;
     future.length = 0;
     s.dirty = recovery || single;
@@ -1078,6 +1135,9 @@
       $(key).value = value;
     $("otherNames").checked = s.otherNames;
     $("epipolar").checked = s.epipolar;
+    $("interpolationIds").value = s.interpolationIds.map(id => id + 1).join(",");
+    $("interpolationIds").setCustomValidity("");
+    $("interpolationError").textContent = "";
     const backup = availableBackup(!!count());
     $("restore").disabled = !count() || !backup;
     $("backupInfo").textContent = backup ?
@@ -1130,8 +1190,12 @@
       cam.panel.querySelector(".empty").hidden = !!v;
     });
     const value = v => v == null ? "—" : Number(v.toPrecision(6)) + " " + (s.unit || "単位未設定");
-    $("z").textContent = value(xyz(s.id, s.frame)?.[2]);
-    $("dist").textContent = value(dist(s.id, s.frame));
+    $("z").textContent = value(xyz(s.id, s.frame)?.[2]) + (interpolated(s.id, s.frame) ? "（補間）" : "");
+    $("dist").textContent = value(dist(s.id, s.frame)) +
+        (distanceInterpolated(s.id, s.frame) ? "（補間）" : "");
+    $("z").classList.toggle("interpolated-value", interpolated(s.id, s.frame));
+    $("dist").classList.toggle("interpolated-value", distanceInterpolated(s.id, s.frame));
+    $("interpolationLegend").hidden = !s.interpolationIds.length;
     $("scope").value = s.scope;
     $("scope").options[0].textContent = "前後 " + s.radius + " F";
     const status =
@@ -1323,6 +1387,7 @@
       history.length = future.length = 0;
       configure();
       selectors();
+      syncSettings();
       changed();
     };
     $("pointName").onchange = e => {
@@ -1357,6 +1422,26 @@
     };
     $("epipolar").onchange = e => {
       s.epipolar = e.target.checked;
+      changed();
+    };
+    $("interpolationIds").onchange = e => {
+      const input = e.target, text = input.value.normalize("NFKC").trim();
+      const parts = text ? text.split(/[,、\s]+/) : [];
+      if (parts.some(p => !/^\d+$/.test(p) || Number(p) < 1 || Number(p) > s.names.length)) {
+        const error = "1〜" + s.names.length + "のIDをカンマで区切って入力してください。設定は変更していません。";
+        input.setCustomValidity(error);
+        $("interpolationError").textContent = error;
+        return;
+      }
+      s.interpolationIds = [...new Set(parts.map(p => Number(p) - 1))].sort((a, b) => a - b);
+      input.value = s.interpolationIds.map(id => id + 1).join(",");
+      input.setCustomValidity("");
+      $("interpolationError").textContent = "";
+      splineCache = [];
+      distanceCache = [];
+      rangeJob = null;
+      s.axes = [];
+      s.view3.fitted = false;
       changed();
     };
     $("scope").onchange = e => {
